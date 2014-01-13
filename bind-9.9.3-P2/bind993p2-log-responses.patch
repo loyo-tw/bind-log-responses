@@ -1,0 +1,213 @@
+diff -cr bind-9.9.3-P2/bin/named/config.c bind-9.9.3-P2-log-responses/bin/named/config.c
+*** bind-9.9.3-P2/bin/named/config.c	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/bin/named/config.c	Sat Jan 11 15:14:51 2014
+***************
+*** 128,133 ****
+--- 128,134 ----
+  #	topology <none>\n\
+  	auth-nxdomain false;\n\
+  	minimal-responses false;\n\
++ 	log-responses false;\n\
+  	recursion true;\n\
+  	provide-ixfr true;\n\
+  	request-ixfr true;\n\
+diff -cr bind-9.9.3-P2/bin/named/named.conf.5 bind-9.9.3-P2-log-responses/bin/named/named.conf.5
+*** bind-9.9.3-P2/bin/named/named.conf.5	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/bin/named/named.conf.5	Sat Jan 11 15:16:38 2014
+***************
+*** 208,213 ****
+--- 208,214 ----
+  	topology { \fIaddress_match_element\fR; ... }; // not implemented
+  	auth\-nxdomain \fIboolean\fR; // default changed
+  	minimal\-responses \fIboolean\fR;
++ 	log\-responses \fIboolean\fR;
+  	recursion \fIboolean\fR;
+  	rrset\-order {
+  		[ class \fIstring\fR ] [ type \fIstring\fR ]
+diff -cr bind-9.9.3-P2/bin/named/named.conf.docbook bind-9.9.3-P2-log-responses/bin/named/named.conf.docbook
+*** bind-9.9.3-P2/bin/named/named.conf.docbook	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/bin/named/named.conf.docbook	Sat Jan 11 15:17:59 2014
+***************
+*** 240,245 ****
+--- 240,246 ----
+  	topology { <replaceable>address_match_element</replaceable>; ... }; // not implemented
+  	auth-nxdomain <replaceable>boolean</replaceable>; // default changed
+  	minimal-responses <replaceable>boolean</replaceable>;
++ 	log-responses <replaceable>boolean</replaceable>;
+  	recursion <replaceable>boolean</replaceable>;
+  	rrset-order {
+  		<optional> class <replaceable>string</replaceable> </optional> <optional> type <replaceable>string</replaceable> </optional>
+***************
+*** 428,433 ****
+--- 429,435 ----
+  	topology { <replaceable>address_match_element</replaceable>; ... }; // not implemented
+  	auth-nxdomain <replaceable>boolean</replaceable>; // default changed
+  	minimal-responses <replaceable>boolean</replaceable>;
++ 	log-responses <replaceable>boolean</replaceable>;
+  	recursion <replaceable>boolean</replaceable>;
+  	rrset-order {
+  		<optional> class <replaceable>string</replaceable> </optional> <optional> type <replaceable>string</replaceable> </optional>
+diff -cr bind-9.9.3-P2/bin/named/query.c bind-9.9.3-P2-log-responses/bin/named/query.c
+*** bind-9.9.3-P2/bin/named/query.c	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/bin/named/query.c	Sat Jan 11 15:22:13 2014
+***************
+*** 163,168 ****
+--- 163,171 ----
+  static inline void
+  log_queryerror(ns_client_t *client, isc_result_t result, int line, int level);
+  
++ static inline void
++ log_response(ns_client_t *client);
++ 
+  static void
+  rpz_st_clear(ns_client_t *client);
+  
+***************
+*** 7369,7374 ****
+--- 7372,7382 ----
+  		     client->message->rcode != dns_rcode_noerror))
+  			eresult = ISC_R_FAILURE;
+  
++         /* making some log about response */
++         if (client->view->logresponses) {
++             log_response(client);
++         }
++ 
+  		query_send(client);
+  		ns_client_detach(&client);
+  	}
+***************
+*** 7377,7382 ****
+--- 7385,7460 ----
+  	return (eresult);
+  }
+  
++ static inline void
++ log_response(ns_client_t *client) {
++     dns_name_t *name, *print_name;
++     dns_rdataset_t *rdataset;
++     isc_buffer_t target;
++     isc_result_t result;
++     isc_region_t r;
++     dns_name_t empty_name;
++     dns_message_t *msg;
++     char t[65536];
++     isc_boolean_t first;
++     isc_boolean_t no_rdata;
++     dns_section_t sectionid;
++     const char *section_name;
++     char namebuf[DNS_NAME_FORMATSIZE];
++     /* init value */
++     sectionid = DNS_SECTION_ANSWER;
++     section_name = "ANSWER";
++ 
++     dns_name_format(client->query.qname, namebuf, sizeof(namebuf));
++     /* making some log about response */
++     msg = client->message;
++     if (sectionid == DNS_SECTION_QUESTION)
++         no_rdata = ISC_TRUE;
++     else
++         no_rdata = ISC_FALSE;
++ 
++     dns_name_init(&empty_name, NULL);
++     result = dns_message_firstname(msg, sectionid);
++     if (result == ISC_R_NOMORE)
++         return;
++     else if (result != ISC_R_SUCCESS)
++         return;
++     for (;;) {
++         name = NULL;
++         dns_message_currentname(msg, sectionid, &name);
++ 
++         isc_buffer_init(&target, t, sizeof(t));
++         first = ISC_TRUE;
++         print_name = name;
++ 
++         for (rdataset = ISC_LIST_HEAD(name->list);
++              rdataset != NULL;
++              rdataset = ISC_LIST_NEXT(rdataset, link)) {
++             result = dns_rdataset_totext(rdataset,
++                              print_name,
++                              ISC_FALSE,
++                              no_rdata,
++                              &target);
++             if (result != ISC_R_SUCCESS)
++                 return;
++             if (first) {
++                 print_name = &empty_name;
++                 first = ISC_FALSE;
++             }
++         }
++         isc_buffer_usedregion(&target, &r);
++         ns_client_log(client, NS_LOGCATEGORY_QUERIES, NS_LOGMODULE_QUERY,ISC_LOG_INFO, "(query: %s) response: %.*s",
++         namebuf,
++         (int)r.length,
++         (char *)r.base);
++ 
++         result = dns_message_nextname(msg, sectionid);
++         if (result == ISC_R_NOMORE)
++             break;
++         else if (result != ISC_R_SUCCESS)
++             return;
++     }
++ }
++ 
+  static inline void
+  log_query(ns_client_t *client, unsigned int flags, unsigned int extflags) {
+  	char namebuf[DNS_NAME_FORMATSIZE];
+diff -cr bind-9.9.3-P2/bin/named/server.c bind-9.9.3-P2-log-responses/bin/named/server.c
+*** bind-9.9.3-P2/bin/named/server.c	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/bin/named/server.c	Sat Jan 11 15:23:39 2014
+***************
+*** 2571,2576 ****
+--- 2571,2581 ----
+  	INSIST(result == ISC_R_SUCCESS);
+  	view->minimalresponses = cfg_obj_asboolean(obj);
+  
++     obj = NULL;
++     result = ns_config_get(maps, "log-responses", &obj);
++     INSIST(result == ISC_R_SUCCESS);
++     view->logresponses = cfg_obj_asboolean(obj);
++ 
+  	obj = NULL;
+  	result = ns_config_get(maps, "transfer-format", &obj);
+  	INSIST(result == ISC_R_SUCCESS);
+diff -cr bind-9.9.3-P2/lib/dns/view.c bind-9.9.3-P2-log-responses/lib/dns/view.c
+*** bind-9.9.3-P2/lib/dns/view.c	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/lib/dns/view.c	Sat Jan 11 15:24:13 2014
+***************
+*** 168,173 ****
+--- 168,174 ----
+  	view->enablevalidation = ISC_TRUE;
+  	view->acceptexpired = ISC_FALSE;
+  	view->minimalresponses = ISC_FALSE;
++ 	view->logresponses = ISC_FALSE;
+  	view->transfer_format = dns_one_answer;
+  	view->cacheacl = NULL;
+  	view->cacheonacl = NULL;
+diff -cr bind-9.9.3-P2/lib/dns/include/dns/view.h bind-9.9.3-P2-log-responses/lib/dns/include/dns/view.h
+*** bind-9.9.3-P2/lib/dns/include/dns/view.h	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/lib/dns/include/dns/view.h	Sat Jan 11 15:24:45 2014
+***************
+*** 123,128 ****
+--- 123,129 ----
+  	isc_boolean_t			additionalfromcache;
+  	isc_boolean_t			additionalfromauth;
+  	isc_boolean_t			minimalresponses;
++ 	isc_boolean_t			logresponses;
+  	isc_boolean_t			enablednssec;
+  	isc_boolean_t			enablevalidation;
+  	isc_boolean_t			acceptexpired;
+diff -cr bind-9.9.3-P2/lib/isccfg/namedconf.c bind-9.9.3-P2-log-responses/lib/isccfg/namedconf.c
+*** bind-9.9.3-P2/lib/isccfg/namedconf.c	Wed Jul 17 06:13:06 2013
+--- bind-9.9.3-P2-log-responses/lib/isccfg/namedconf.c	Sat Jan 11 15:25:21 2014
+***************
+*** 1389,1394 ****
+--- 1389,1395 ----
+  	{ "max-udp-size", &cfg_type_uint32, 0 },
+  	{ "min-roots", &cfg_type_uint32, CFG_CLAUSEFLAG_NOTIMP },
+  	{ "minimal-responses", &cfg_type_boolean, 0 },
++ 	{ "log-responses", &cfg_type_boolean, 0 },
+  	{ "preferred-glue", &cfg_type_astring, 0 },
+  	{ "provide-ixfr", &cfg_type_boolean, 0 },
+  	/*
